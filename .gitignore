@@ -1,0 +1,12 @@
+# Python Virtual Environment
+venv/
+__pycache__/
+
+# Raw Data (Never push millions of characters of raw data to GitHub)
+sec_data/
+
+# Databases (Never push vector DBs; they are too large and generated locally)
+chroma_db/
+
+# Security (For when we eventually use API keys)
+.env
