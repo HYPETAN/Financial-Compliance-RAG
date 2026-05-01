@@ -2,70 +2,86 @@ import os
 import chromadb
 from chromadb.utils import embedding_functions
 
-# Import the universal parser you just perfected!
+# Import your masterpiece parser
 from chunking import clean_universal_sec_html, chunk_clean_text
 
 
-def build_vector_database():
-    print("Initializing local ChromaDB...")
-    # This creates a persistent local folder './chroma_db' to save your vectors permanently
+def batch_build_vector_database():
+    print("Initializing Enterprise Local ChromaDB for Batch Processing...")
     chroma_client = chromadb.PersistentClient(path="./chroma_db")
-
-    # We use BAAI's bge-small model.
-    # It is incredibly fast, runs completely offline, and is highly ranked on the Massive Text Embedding Benchmark (MTEB).
     emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
         model_name="BAAI/bge-small-en-v1.5")
 
-    # Create or load the collection (Think of a collection like a SQL table)
     collection = chroma_client.get_or_create_collection(
         name="sec_filings",
         embedding_function=emb_fn
     )
 
-    # Dynamically find our Apple 10-K document
-    aapl_dir = os.path.join("sec_data", "sec-edgar-filings", "AAPL", "10-K")
-    target_file = None
-    for root, dirs, files in os.walk(aapl_dir):
-        for f in files:
-            if f.endswith('.txt') or f.endswith('.html'):
-                target_file = os.path.join(root, f)
-                break
-        if target_file:
-            break
+    base_dir = os.path.join("sec_data", "sec-edgar-filings")
 
-    if not target_file:
-        print("Could not find AAPL filing to vectorize.")
+    if not os.path.exists(base_dir):
+        print("Data directory not found. Did ingest.py finish?")
         return
 
-    print(f"Processing document for vectorization: {target_file}")
+    # Iterate through all ticker folders (AAPL, MSFT, JPM, etc.)
+    for ticker in os.listdir(base_dir):
+        ticker_dir = os.path.join(base_dir, ticker, "10-K")
+        if not os.path.exists(ticker_dir):
+            continue
 
-    # 1. Clean the text using your universal parser
-    clean_text = clean_universal_sec_html(target_file)
+        # Iterate through all filing years for this ticker
+        for accession_num in os.listdir(ticker_dir):
+            accession_dir = os.path.join(ticker_dir, accession_num)
 
-    # 2. Chunk it and attach metadata (CRUCIAL for Phase 2 filtering)
-    chunks = chunk_clean_text(clean_text, source_meta="AAPL_2024_10K")
+            # Find the actual text/html file
+            target_file = None
+            for f in os.listdir(accession_dir):
+                if f.endswith('.txt') or f.endswith('.html'):
+                    target_file = os.path.join(accession_dir, f)
+                    break
 
-    print(f"Embedding {len(chunks)} chunks and inserting into ChromaDB...")
-    print("Note: The first time you run this, it will download the embedding model (approx 130MB).")
+            if target_file:
+                print(f"\n{'-'*40}")
+                print(f"Processing: {ticker} | Filing: {accession_num}")
+                try:
+                    # 1. Clean the massive HTML bloat
+                    clean_text = clean_universal_sec_html(target_file)
 
-    # We must extract the text strings and metadata dictionaries from the LangChain Document objects
-    documents_to_insert = [chunk.page_content for chunk in chunks]
-    metadatas_to_insert = [chunk.metadata for chunk in chunks]
+                    # 2. Chunk it with highly specific metadata
+                    # E.g., MSFT_0000062818-23-000034
+                    source_tag = f"{ticker}_{accession_num}"
+                    chunks = chunk_clean_text(
+                        clean_text, source_meta=source_tag)
 
-    # Create unique IDs for every single chunk
-    ids_to_insert = [f"AAPL_2024_chunk_{i}" for i in range(len(chunks))]
+                    if not chunks:
+                        continue
 
-    # Execute the database insertion
-    collection.add(
-        documents=documents_to_insert,
-        metadatas=metadatas_to_insert,
-        ids=ids_to_insert
-    )
+                    # 3. Extract data for ChromaDB
+                    documents_to_insert = [
+                        chunk.page_content for chunk in chunks]
+                    metadatas_to_insert = [chunk.metadata for chunk in chunks]
 
-    print("\n[SUCCESS] Vector database built and populated!")
+                    # Unique IDs are strictly required so we don't overwrite previous runs
+                    ids_to_insert = [
+                        f"{source_tag}_chunk_{i}" for i in range(len(chunks))]
+
+                    print(
+                        f"Embedding {len(chunks)} chunks into the database...")
+                    collection.add(
+                        documents=documents_to_insert,
+                        metadatas=metadatas_to_insert,
+                        ids=ids_to_insert
+                    )
+                except Exception as e:
+                    print(
+                        f"[ERROR] Failed processing {ticker} {accession_num}: {e}")
+
+    print("\n" + "="*50)
+    print("[SUCCESS] Massive Vector Database Built!")
     print(
         f"Total documents currently in the 'sec_filings' collection: {collection.count()}")
+    print("="*50)
 
 
 if __name__ == "__main__":
-    build_vector_database()
+    batch_build_vector_database()
